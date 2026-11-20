@@ -35,8 +35,12 @@ jobs:
       - name: Apply KernelSU Next hooks
         run: |
           git apply --verbose .rota/rota-ksu.patch
-          git clone "$KSU_REPO" KernelSU-Next          # full history: KSU version = 10200 + commit count
-          git -C KernelSU-Next checkout -q "$KSU_COMMIT"
+          # The pinned commit is no longer on a branch (force-pushed), but GitHub serves it by SHA.
+          # Full history (not shallow): KSU version = 10200 + commit count = 12889.
+          git init -q KernelSU-Next
+          git -C KernelSU-Next remote add origin "$KSU_REPO"
+          git -C KernelSU-Next fetch -q origin "$KSU_COMMIT"
+          git -C KernelSU-Next checkout -q FETCH_HEAD
           ln -sfn ../KernelSU-Next/kernel drivers/kernelsu
           echo "KernelSU-Next version: $((10200 + $(git -C KernelSU-Next rev-list --count HEAD)))"
 
