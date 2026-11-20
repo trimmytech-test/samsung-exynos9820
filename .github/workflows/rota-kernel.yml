@@ -52,9 +52,10 @@ jobs:
           set -e -o pipefail
           NODEFAULTS=1 ./cruelbuild config model=$MODEL name="RotaKSU" toolchain=cruel +nohardening +ksu 2>&1 | tee config.info
           echo "---- key options ----"
-          grep -E "^CONFIG_KSU|KSU_KPROBES_HOOK|^CONFIG_OVERLAY_FS|CONFIG_SECURITY_DEFEX|CONFIG_UH[= ]|CONFIG_RKP_KDP|CONFIG_PROCA" .config || true
-          grep -q '^CONFIG_KSU=y' .config || { echo "CONFIG_KSU missing"; exit 1; }
-          grep -q '^CONFIG_KSU_KPROBES_HOOK=y' .config && { echo "kprobes hook must be off (manual hooks)"; exit 1; } || true
+          CFG=config.$MODEL                     # cruelbuild writes KCONFIG_CONFIG=config.<model>
+          grep -E "^CONFIG_KSU|KSU_KPROBES_HOOK|OVERLAY_FS|CONFIG_SECURITY_DEFEX|CONFIG_UH[= ]|CONFIG_RKP_KDP|CONFIG_PROCA" $CFG || true
+          grep -q '^CONFIG_KSU=y' $CFG || { echo "CONFIG_KSU missing"; exit 1; }
+          grep -q '^CONFIG_KSU_KPROBES_HOOK=y' $CFG && { echo "kprobes hook must be off (manual hooks)"; exit 1; } || true
 
       - name: Build kernel
         run: ./cruelbuild :build 2>&1 | tee build.log | tail -50
@@ -86,6 +87,6 @@ jobs:
           name: RotaKSU-G977B-FUE3
           path: |
             G977B.img
-            .config
+            config.G977B
             config.info
             build.log
