@@ -1,0 +1,87 @@
+# RotaKernel: Samsung's own FUE3 kernel (via CruelKernel's cruel-FUE3-v4.4 tree) + KernelSU Next.
+# Exactly matches the phone's firmware (G977BXXU7FUE3, One UI 3.1, binary 7, Android 11 / 2021-05),
+# unlike BatAxe (One UI 4.1 based), whose mismatch caused the kernel panics.
+name: RotaKernel
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [".rota/**", ".github/workflows/rota-kernel.yml"]
+
+env:
+  KSU_REPO: https://github.com/GoRhanHee/KernelSU-Next.git
+  KSU_COMMIT: c380093e37f6e9c12b580ee348def4d4b53543de   # same KernelSU-Next as BatAxe → version 12889, manager v1.1.1
+  MODEL: G977B
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libtinfo5 bc bison flex libssl-dev cpio lz4 device-tree-compiler
+
+      - name: Apply KernelSU Next hooks
+        run: |
+          git apply --verbose .rota/rota-ksu.patch
+          git clone "$KSU_REPO" KernelSU-Next          # full history: KSU version = 10200 + commit count
+          git -C KernelSU-Next checkout -q "$KSU_COMMIT"
+          ln -sfn ../KernelSU-Next/kernel drivers/kernelsu
+          echo "KernelSU-Next version: $((10200 + $(git -C KernelSU-Next rev-list --count HEAD)))"
+
+      - name: Deploy toolchain
+        run: git clone --depth 1 --branch cruel --single-branch https://github.com/CruelKernel/samsung-exynos9820-toolchain toolchain
+
+      - name: Configure (stock FUE3 defaults + no hypervisor + KernelSU)
+        run: |
+          set -e -o pipefail
+          NODEFAULTS=1 ./cruelbuild config model=$MODEL name="RotaKSU" toolchain=cruel +nohardening +ksu 2>&1 | tee config.info
+          echo "---- key options ----"
+          grep -E "^CONFIG_KSU|KSU_KPROBES_HOOK|^CONFIG_OVERLAY_FS|CONFIG_SECURITY_DEFEX|CONFIG_UH[= ]|CONFIG_RKP_KDP|CONFIG_PROCA" .config || true
+          grep -q '^CONFIG_KSU=y' .config || { echo "CONFIG_KSU missing"; exit 1; }
+          grep -q '^CONFIG_KSU_KPROBES_HOOK=y' .config && { echo "kprobes hook must be off (manual hooks)"; exit 1; } || true
+
+      - name: Build kernel
+        run: ./cruelbuild :build 2>&1 | tee build.log | tail -50
+
+      - name: Install mkbootimg / avbtool
+        run: |
+          wget -q https://android.googlesource.com/platform/system/tools/mkbootimg/+archive/refs/heads/main.tar.gz -O - | tar xzf - mkbootimg.py gki
+          chmod +x mkbootimg.py && sudo mv mkbootimg.py /usr/local/bin/mkbootimg
+          sudo mv gki "$(python -c 'import site; print(site.getsitepackages()[0])')"
+          wget -q https://android.googlesource.com/platform/external/avb/+archive/refs/heads/main.tar.gz -O - | tar xzf - avbtool.py
+          chmod +x avbtool.py && sudo mv avbtool.py /usr/local/bin/avbtool
+
+      - name: Make boot image
+        run: |
+          ./cruelbuild :mkimg
+          ls -la *.img
+          python3 - <<'EOF'
+          import struct
+          h = open("G977B.img", "rb").read(64)
+          v = struct.unpack("<I", h[44:48])[0]; ver, p = v >> 11, v & 0x7ff
+          print("boot header: Android %d.%d.%d / %d-%02d (0x%08x)" % ((ver>>14)&0x7f, (ver>>7)&0x7f, ver&0x7f, (p>>4)+2000, p&0xf, v))
+          assert v == 0x16000155, "header must be Android 11 / 2021-05 to match the firmware"
+          EOF
+          strings arch/arm64/boot/Image | grep -m1 "Linux version"
+          strings arch/arm64/boot/Image | grep -c "KernelSU" | xargs echo "KernelSU strings:"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RotaKSU-G977B-FUE3
+          path: |
+            G977B.img
+            .config
+            config.info
+            build.log
