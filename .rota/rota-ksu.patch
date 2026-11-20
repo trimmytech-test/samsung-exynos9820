@@ -54,7 +54,7 @@ index 3ffcdbc30..de26220fd 100644
  
 +#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
 +extern bool ksu_execveat_hook __read_mostly;
-+extern __attribute__((hot, always_inline)) int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
++extern int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
 +			       void *__never_use_argv, void *__never_use_envp,
 +			       int *__never_use_flags);
 +extern int ksu_handle_execve_ksud(const char __user *filename_user,
@@ -98,7 +98,7 @@ index 23c53abe9..142796241 100644
   * switching the fsuid/fsgid around to the real ones.
   */
 +#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
-+extern __attribute__((hot, always_inline)) int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
++extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
 +			                    int *flags);
 +#endif
 +
@@ -152,7 +152,7 @@ index 873785dae..7a75dd340 100644
  
  #if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)
 +#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
-+extern __attribute__((hot, always_inline)) int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
++extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
 +#endif
 +
  SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
