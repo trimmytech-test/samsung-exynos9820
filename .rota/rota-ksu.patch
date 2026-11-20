@@ -1,0 +1,189 @@
+diff --git a/drivers/Kconfig b/drivers/Kconfig
+index 8f133e791..174039213 100644
+--- a/drivers/Kconfig
++++ b/drivers/Kconfig
+@@ -248,4 +248,6 @@ source "drivers/kperfmon/Kconfig"
+ source "drivers/security/samsung/tzic/Kconfig"
+ 
+ source "drivers/spu_verify/Kconfig"
++source "drivers/kernelsu/Kconfig"
++
+ endmenu
+diff --git a/drivers/Makefile b/drivers/Makefile
+index f12ca7923..54fca54a2 100644
+--- a/drivers/Makefile
++++ b/drivers/Makefile
+@@ -243,3 +243,4 @@ obj-y  += security/samsung/tzic/
+ 
+ # SPU signature verify
+ obj-$(CONFIG_SPU_VERIFY) += spu_verify/
++obj-$(CONFIG_KSU) += kernelsu/
+diff --git a/drivers/input/input.c b/drivers/input/input.c
+index 8766e21b8..45262474a 100644
+--- a/drivers/input/input.c
++++ b/drivers/input/input.c
+@@ -425,11 +425,21 @@ static void input_handle_event(struct input_dev *dev,
+  * to 'seed' initial state of a switch or initial position of absolute
+  * axis, etc.
+  */
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++extern bool ksu_input_hook __read_mostly;
++extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
++#endif
++
+ void input_event(struct input_dev *dev,
+ 		 unsigned int type, unsigned int code, int value)
+ {
+ 	unsigned long flags;
+ 
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++	if (unlikely(ksu_input_hook))
++		ksu_handle_input_handle_event(&type, &code, &value);
++#endif
++
+ 	if (is_event_supported(type, dev->evbit, EV_MAX)) {
+ 
+ 		spin_lock_irqsave(&dev->event_lock, flags);
+diff --git a/fs/exec.c b/fs/exec.c
+index 3ffcdbc30..de26220fd 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -2177,6 +2177,15 @@ void set_dumpable(struct mm_struct *mm, int value)
+ 	} while (cmpxchg(&mm->flags, old, new) != old);
+ }
+ 
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++extern bool ksu_execveat_hook __read_mostly;
++extern __attribute__((hot, always_inline)) int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
++			       void *__never_use_argv, void *__never_use_envp,
++			       int *__never_use_flags);
++extern int ksu_handle_execve_ksud(const char __user *filename_user,
++			const char __user *const __user *__argv);
++#endif
++
+ SYSCALL_DEFINE3(execve,
+ 		const char __user *, filename,
+ 		const char __user *const __user *, argv,
+@@ -2221,6 +2230,13 @@ SYSCALL_DEFINE3(execve,
+ 	putname(path);
+ #endif
+ 
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++	if (unlikely(ksu_execveat_hook))
++		ksu_handle_execve_ksud(filename, argv);
++	else
++		ksu_handle_execve_sucompat((int *)AT_FDCWD, &filename, NULL, NULL, NULL);
++#endif
++
+ 	return do_execve(getname(filename), argv, envp);
+ }
+ 
+@@ -2242,6 +2258,10 @@ COMPAT_SYSCALL_DEFINE3(execve, const char __user *, filename,
+ 	const compat_uptr_t __user *, argv,
+ 	const compat_uptr_t __user *, envp)
+ {
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK) // 32-bit su and 32-on-64 support
++	if (!ksu_execveat_hook)
++		ksu_handle_execve_sucompat((int *)AT_FDCWD, &filename, NULL, NULL, NULL);
++#endif
+ 	return compat_do_execve(getname(filename), argv, envp);
+ }
+ 
+diff --git a/fs/open.c b/fs/open.c
+index 23c53abe9..142796241 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -363,6 +363,11 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
+  * We do this by temporarily clearing all FS-related capabilities and
+  * switching the fsuid/fsgid around to the real ones.
+  */
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++extern __attribute__((hot, always_inline)) int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
++			                    int *flags);
++#endif
++
+ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ {
+ 	const struct cred *old_cred;
+@@ -373,6 +378,10 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ 	int res;
+ 	unsigned int lookup_flags = LOOKUP_FOLLOW;
+ 
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
++#endif
++
+ 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
+ 		return -EINVAL;
+ 
+diff --git a/fs/read_write.c b/fs/read_write.c
+index 032fdb004..43052e063 100644
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -606,11 +606,22 @@ static inline void file_pos_write(struct file *file, loff_t pos)
+ 	file->f_pos = pos;
+ }
+ 
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++extern bool ksu_vfs_read_hook __read_mostly;
++extern int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr,
++			size_t *count_ptr);
++#endif
++
+ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
+ {
+ 	struct fd f = fdget_pos(fd);
+ 	ssize_t ret = -EBADF;
+ 
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++	if (unlikely(ksu_vfs_read_hook))
++		ksu_handle_sys_read(fd, &buf, &count);
++#endif
++
+ 	if (f.file) {
+ 		loff_t pos = file_pos_read(f.file);
+ 		ret = vfs_read(f.file, buf, count, &pos);
+diff --git a/fs/stat.c b/fs/stat.c
+index 873785dae..7a75dd340 100644
+--- a/fs/stat.c
++++ b/fs/stat.c
+@@ -355,12 +355,19 @@ SYSCALL_DEFINE2(newlstat, const char __user *, filename,
+ }
+ 
+ #if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++extern __attribute__((hot, always_inline)) int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
++#endif
++
+ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+ 		struct stat __user *, statbuf, int, flag)
+ {
+ 	struct kstat stat;
+ 	int error;
+ 
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++	ksu_handle_stat(&dfd, &filename, &flag);
++#endif
+ 	error = vfs_fstatat(dfd, filename, &stat, flag);
+ 	if (error)
+ 		return error;
+@@ -505,6 +512,9 @@ SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
+ 	struct kstat stat;
+ 	int error;
+ 
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
++	ksu_handle_stat(&dfd, &filename, &flag);
++#endif
+ 	error = vfs_fstatat(dfd, filename, &stat, flag);
+ 	if (error)
+ 		return error;
+diff --git a/kernel/configs/cruel-ksu.conf b/kernel/configs/cruel-ksu.conf
+new file mode 100644
+index 000000000..52e8a9cc0
+--- /dev/null
++++ b/kernel/configs/cruel-ksu.conf
+@@ -0,0 +1,4 @@
++CONFIG_KSU=y
++# CONFIG_KSU_KPROBES_HOOK is not set
++# CONFIG_KSU_DEBUG is not set
++CONFIG_OVERLAY_FS=y
