@@ -58,7 +58,16 @@ jobs:
           grep -q '^CONFIG_KSU_KPROBES_HOOK=y' $CFG && { echo "kprobes hook must be off (manual hooks)"; exit 1; } || true
 
       - name: Build kernel
-        run: ./cruelbuild :build 2>&1 | tee build.log | tail -50
+        run: |
+          set +e
+          ./cruelbuild :build > build.log 2>&1
+          rc=$?
+          echo "==== compiler errors (if any) ===="
+          grep -nE "error:|Error [0-9]+|undefined reference|\*\*\*" build.log | head -80
+          echo "==== last lines ===="
+          tail -25 build.log
+          test -f arch/arm64/boot/Image* || ls arch/arm64/boot/
+          exit $rc
 
       - name: Install mkbootimg / avbtool
         run: |
@@ -83,6 +92,7 @@ jobs:
           strings arch/arm64/boot/Image | grep -c "KernelSU" | xargs echo "KernelSU strings:"
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: RotaKSU-G977B-FUE3
           path: |
@@ -90,3 +100,4 @@ jobs:
             config.G977B
             config.info
             build.log
+          if-no-files-found: warn
